@@ -3,23 +3,36 @@ using System.Net.WebSockets;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text;
-using System.Threading.Channels;
-using System.Net.Sockets;
-using Microsoft.IdentityModel.Tokens;
 
 namespace WebSocketExample
 {
     public class ChatWebSocketHandler
     {
         // 그룹별 클라이언트 연결 관리 : 그룹명 -> (userId -> ClientConnection)
-        private readonly ConcurrentDictionary<string, ConcurrentDictionary<string,ClientConnection>> _groups = new();
+        private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ClientConnection>> _groups = new();
 
-        // 메시지 큐를 ConcurrentQueue 대신 Channel 을 사용
-        private readonly Channel<ChatMessage> _channel = Channel.CreateUnbounded<ChatMessage>();
+        // 모든 연결 관리 - userId -> WebSocket
+        private readonly ConcurrentDictionary<string, WebSocket> _allConnections = new();
 
-        // 연결&가입
+        /// <summary>
+        /// 클라이언트 연결을 처리하고 메시지를 수신한다.
+        /// </summary>
+        /// <param name="webSocket"></param>
+        /// <param name="user"></param>
+        /// <returns></returns>
         public async Task HandleAsync(WebSocket webSocket, ClaimsPrincipal user)
         {
+            var userId = GetUserId(webSocket, user);
+            if (string.IsNullOrEmpty(userId))
+            {
+                // userId가 없으면 연결 종료
+                await webSocket.CloseAsync(WebSocketCloseStatus.PolicyViolation, "User id not found", CancellationToken.None);
+                return;
+            }
+
+            // 전체 연결에 추가 (키: userId)
+            _allConnections.TryAdd(userId, webSocket);
+
             var buffer = new byte[1024 * 4];
             try
             {
@@ -45,11 +58,42 @@ namespace WebSocketExample
             }
             finally
             {
-                // 연결 종료 또는 예외 발생 시 모든 그룹에서 해당 소켓 제거
+                // 연결 종료 시, 모든 그룹에서 해당 사용자 제거
                 RemoveConnectionFromAllGroups(webSocket, user);
+                _allConnections.TryRemove(userId, out _); // 전체연결에서 삭제
             }
         }
 
+        /// <summary>
+        /// 그룹 탈퇴
+        /// </summary>
+        /// <param name="socket"></param>
+        // 모든 그룹에서 해당 소켓 제거 (소켓에서 userId를 추출)
+        private void RemoveConnectionFromAllGroups(WebSocket socket, ClaimsPrincipal user)
+        {
+            var userId = GetUserId(socket, user);
+            foreach (var groupKey in _groups.Keys.ToList())
+            {
+                if (_groups.TryGetValue(groupKey, out var group))
+                {
+                    group.TryRemove(userId, out _);
+                    if (group.IsEmpty)
+                    {
+                        _groups.TryRemove(groupKey, out _);
+                    }
+                }
+            }
+
+            Console.WriteLine(GetGroupStatus());
+        }
+
+        /// <summary>
+        /// 수신한 JSON 메시지를 역직렬화하고 Command에 따라 처리한다.
+        /// </summary>
+        /// <param name="webSocket"></param>
+        /// <param name="receivedText"></param>
+        /// <param name="user"></param>
+        /// <returns></returns>
         private async Task ProcessMessageAsync(WebSocket webSocket, string receivedText, ClaimsPrincipal user)
         {
             try
@@ -59,9 +103,7 @@ namespace WebSocketExample
                     PropertyNameCaseInsensitive = true
                 };
                 // 받은 텍스트 디코딩
-                //var data = JsonSerializer.Deserialize<Dictionary<string, string>>(receivedText);
-                var data = JsonSerializer.Deserialize<ChatMessage>(receivedText);
-
+                var data = JsonSerializer.Deserialize<ChatMessage>(receivedText, options);
 
 
                 // 디코딩에 실패하지 않았고, command라는 key가 존재하는지 검사
@@ -109,7 +151,7 @@ namespace WebSocketExample
         }
 
         /// <summary>
-        /// 연결
+        /// 그룹에 가입
         /// </summary>
         /// <param name="webSocket"></param>
         /// <param name="data"></param>
@@ -117,14 +159,12 @@ namespace WebSocketExample
         /// <returns></returns>
         private async Task HandleJoinAsync(WebSocket webSocket, ChatMessage data, ClaimsPrincipal user)
         {
-            // data.Group에 가입할 그룹명, data.command는 "join"
-            if(string.IsNullOrEmpty(data.group))
+            if (string.IsNullOrEmpty(data.group))
             {
                 await SendErrorAsync(webSocket, "Group name is required for join");
                 return;
             }
 
-            // group 가입시킬때 토큰에 UserId를 뽑아낸다.
             var userId = GetUserId(webSocket, user);
             if (string.IsNullOrEmpty(userId))
             {
@@ -132,17 +172,13 @@ namespace WebSocketExample
                 return;
             }
 
-            // 그룹 참여 권한 체크(필요시 구현)
-            // Role이 Manager인지 검사
-            var allowedGroupsClaim = GetRole(webSocket, user);
-            if (string.IsNullOrEmpty(allowedGroupsClaim) || allowedGroupsClaim != "Manager")
+            var allowedRole = GetRole(webSocket, user);
+            if (string.IsNullOrEmpty(allowedRole) || allowedRole != "Manager")
             {
                 await SendErrorAsync(webSocket, "You do not have permission to join this group");
                 return;
             }
 
-            // 그룹관리
-            // 그룹 관리: 그룹별로 ConcurrentDictionary를 사용하여 userId를 키로 저장
             var group = _groups.GetOrAdd(data.group, _ => new ConcurrentDictionary<string, ClientConnection>());
             // 기존 연결이 있다면 제거하고 닫음
             if (group.TryRemove(userId, out var existing))
@@ -152,12 +188,48 @@ namespace WebSocketExample
                     await existing.Socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Replaced by new connection", CancellationToken.None);
                 }
             }
-
-            // 새 연결 추가
             group[userId] = new ClientConnection { Socket = webSocket, UserId = userId };
 
-            // 예: 그룹 가입 후 전체 그룹 현황 출력
             Console.WriteLine(GetGroupStatus());
+        }
+
+        /// <summary>
+        /// 그룹 나갔을때 처리
+        /// </summary>
+        /// <param name="webSocket"></param>
+        /// <param name="data"></param>
+        /// <returns></returns>
+        private async Task HandleLeaveAsync(WebSocket webSocket, ChatMessage data, ClaimsPrincipal user)
+        {
+            if (string.IsNullOrEmpty(data.group))
+            {
+                await SendErrorAsync(webSocket, "Group name is required for leave");
+                return;
+            }
+
+            var leaveGroupName = data.group;
+            if (_groups.TryGetValue(leaveGroupName, out var group))
+            {
+                var removed = group.TryRemove(GetUserId(webSocket, user), out var connection);
+                if (!removed)
+                {
+                    await SendErrorAsync(webSocket, $"You are not a member of group '{leaveGroupName}'.");
+                }
+                else
+                {
+                    // 그룹이 비었으면 삭제
+                    if (group.IsEmpty)
+                    {
+                        _groups.TryRemove(leaveGroupName, out _);
+                    }
+                    var confirmation = new { info = $"You have left group '{leaveGroupName}'." };
+                    await SendAsync(webSocket, JsonSerializer.Serialize(confirmation));
+                }
+            }
+            else
+            {
+                await SendErrorAsync(webSocket, $"Group '{leaveGroupName}' does not exist.");
+            }
         }
 
         public string GetGroupStatus()
@@ -173,43 +245,16 @@ namespace WebSocketExample
             }
             return sb.ToString();
         }
+
+       
+
         /// <summary>
-        /// 그룹 나갔을때 처리
+        /// 클라이언트에서 보낸 메시지 수신
         /// </summary>
         /// <param name="webSocket"></param>
         /// <param name="data"></param>
+        /// <param name="user"></param>
         /// <returns></returns>
-        private async Task HandleLeaveAsync(WebSocket webSocket, ChatMessage data, ClaimsPrincipal user)
-        {
-
-            if(string.IsNullOrEmpty(data.group))
-            {
-                await SendErrorAsync(webSocket, "Group name is required for leave");
-                return;
-            }
-
-            var leaveGroupName = data.group;
-
-            if (_groups.TryGetValue(leaveGroupName, out var group))
-            {
-                var removed = group.TryRemove(GetUserId(webSocket, user), out var connection);
-                if (!removed)
-                {
-                    await SendErrorAsync(webSocket, $"You are not a member of group '{leaveGroupName}'.");
-                }
-                else
-                {
-                    var confirmation = new { info = $"You have left group '{leaveGroupName}'." };
-                    await SendAsync(webSocket, JsonSerializer.Serialize(confirmation));
-                }
-            }
-            else
-            {
-                await SendErrorAsync(webSocket, $"Group '{leaveGroupName}' does not exist.");
-            }
-        }
-
-        // 클라이언트 --> 서버 수신
         private async Task HandleSendAsync(WebSocket webSocket, ChatMessage data, ClaimsPrincipal user)
         {
             // Group과 Message 프로퍼티가 null 또는 빈 문자열인지 검사합니다.
@@ -253,41 +298,9 @@ namespace WebSocketExample
                 group = data.group,
                 message = $"보내는 사람 ID: {currentUserId} / 메시지 내용 : {data.message}"
             };
+
+            // 메시지 내용 출력
             Console.WriteLine(chatMsg);
-
-            // 받은 메시지를 그대로 돌려주는 예시
-            //EnqueueMessage(chatMsg);
-        }
-
-        // 서버 -> 클라이언트 메시지 전송
-        // 메시지 큐 처리: Channel을 사용한 비동기 소비자 
-        public async Task ProcessMessageQueueAsync(CancellationToken cancellationToken)
-        {
-            await foreach (var chatMsg in _channel.Reader.ReadAllAsync(cancellationToken))
-            {
-                if (_groups.TryGetValue(chatMsg.group, out var group))
-                {
-                    foreach (var kvp in group)
-                    {
-                        var connection = kvp.Value;
-                        if (connection.Socket.State == WebSocketState.Open)
-                        {
-                            //Console.WriteLine($"{connection.UserId} / {chatMsg}");
-                            var outgoing = Encoding.UTF8.GetBytes(chatMsg.message);
-                            // 전송 결과는 fire-and-forget으로 처리
-                            _ = connection.Socket.SendAsync(new ArraySegment<byte>(outgoing),
-                                    WebSocketMessageType.Text,
-                                    true,
-                                    CancellationToken.None);
-                        }
-                        else
-                        {
-                            // 만약 소켓이 닫혀 있다면 해당 사용자를 제거합니다.
-                            group.TryRemove(kvp.Key, out _);
-                        }
-                    }
-                }
-            }
         }
 
         // 에러 메시지 전송
@@ -303,40 +316,65 @@ namespace WebSocketExample
             await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
         }
 
+
         /// <summary>
-        /// 그룹 탈퇴
+        /// 그룹별 브로드캐스트: 특정 그룹에 가입한 모든 클라이언트에게 메시지 전송
         /// </summary>
-        /// <param name="socket"></param>
-        // 모든 그룹에서 해당 소켓 제거 (소켓에서 userId를 추출)
-        private void RemoveConnectionFromAllGroups(WebSocket socket, ClaimsPrincipal user)
+        public async Task BroadcastGroupAsync(string groupName, string message)
         {
-            foreach (var group in _groups)
+            if (_groups.TryGetValue(groupName, out var group))
             {
-                group.Value.TryRemove(GetUserId(socket, user), out _);
+                byte[] outgoing = Encoding.UTF8.GetBytes(message);
+                foreach (var kvp in group)
+                {
+                    var connection = kvp.Value;
+                    if (connection.Socket.State == WebSocketState.Open)
+                    {
+                        await connection.Socket.SendAsync(new ArraySegment<byte>(outgoing),
+                            WebSocketMessageType.Text,
+                            true,
+                            CancellationToken.None);
+                    }
+                }
             }
-
-            // 예: 그룹 가입 후 전체 그룹 현황 출력
-            Console.WriteLine(GetGroupStatus());
+            else
+            {
+                Console.WriteLine($"Group '{groupName}' does not exist.");
+            }
         }
 
         /// <summary>
-        /// 서버는 여기 Queue에 담아 보냄
+        /// 모든 연결 중, 그룹에 가입하지 않은 클라이언트에게 브로드캐스트
         /// </summary>
-        /// <param name="chatMsg"></param>
-        // EnqueueMessage: Channel Writer를 사용
-        public void EnqueueMessage(ChatMessage chatMsg)
+        public async Task BroadcastNonGroupMembersAsync(string message)
         {
-            _channel.Writer.TryWrite(chatMsg);
+            byte[] outgoing = Encoding.UTF8.GetBytes(message);
+            foreach (var kvp in _allConnections)
+            {
+                string userId = kvp.Key;
+                WebSocket socket = kvp.Value;
+
+                // 모든 그룹 중에 userId가 포함되어 있는지 검사
+                bool isInGroup = _groups.Values.Any(group => group.ContainsKey(userId));
+                if (!isInGroup && socket.State == WebSocketState.Open)
+                {
+                    await socket.SendAsync(new ArraySegment<byte>(outgoing),
+                        WebSocketMessageType.Text,
+                        true,
+                        CancellationToken.None);
+                }
+            }
         }
 
 
-        //  클라이언트의 인증 정보를 기반으로 UserId 뽑아낸다.
+        //  JWT 에서 UserId 뽑아낸다.
         private string GetUserId(WebSocket socket, ClaimsPrincipal user)
         {
-            var currentUserId = user.FindFirst("UserId")?.Value;
+            var currentUserId = user.FindFirst("userId")?.Value;
             return currentUserId;
         }
 
+        // JWT 에서 ROLE 추출
         private string GetRole(WebSocket socket, ClaimsPrincipal user)
         {
             var allowedGroupsClaim = user.FindFirst("Role")?.Value;
