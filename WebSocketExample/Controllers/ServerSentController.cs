@@ -20,10 +20,10 @@ namespace WebSocketExample.Controllers
         {
             try
             {
-                // 예시 1: 특정 그룹에 메시지 브로드캐스트
+                // 특정 그룹에 메시지 브로드캐스트
                  await chatHandler.BroadcastGroupAsync(request.group, $"[서버가 보냄] {request.message}");
 
-                // 예시 2: 그룹에 가입하지 않은 모든 클라이언트에게 브로드캐스트
+                // 그룹에 가입하지 않은 모든 클라이언트에게 브로드캐스트
                 //await chatHandler.BroadcastNonGroupMembersAsync($"[서버가 보냄] {request.message}");
                 return Ok("Message broadcast scheduled");
             }
