@@ -16,14 +16,15 @@ namespace WebSocketExample.Controllers
 
         [HttpGet]
         [HttpPost("broadcast")]
-        public async Task<IActionResult> BroadcastMessage([FromBody] BroadcastRequest request)
+        public async Task<IActionResult> BroadcastMessage([FromBody] ChatMessage request)
         {
             try
             {
                 chatHandler.EnqueueMessage(new ChatMessage
                 {
-                    Group = request.Group,
-                    Message = $"[서버가 보냄] {request.Message}"
+                    ///command = request.command,
+                    group = request.group,
+                    message = $"[서버가 보냄] {request.message}"
                 });
                 return Ok("Message broadcast scheduled");
             }
@@ -36,9 +37,5 @@ namespace WebSocketExample.Controllers
 
     }
 
-    public class BroadcastRequest
-    {
-        public string Group { get; set; }
-        public string Message { get; set; }
-    }
+  
 }

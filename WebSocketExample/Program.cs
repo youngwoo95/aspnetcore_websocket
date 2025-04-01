@@ -19,8 +19,9 @@ namespace WebSocketExample
     // 채팅 메시지 모델
     public record ChatMessage
     {
-        public string Group { get; init; }
-        public string Message { get; init; }
+        public string? command { get; set; }
+        public string? group { get; init; }
+        public string? message { get; set; }
     }
 
     public class Program
@@ -72,7 +73,7 @@ namespace WebSocketExample
 
             // WebSocket 관련 서비스 등록
             builder.Services.AddSingleton<ChatWebSocketHandler>();
-
+            builder.Services.AddHostedService<ChatBackgroundService>();
 
             var app = builder.Build();
 
@@ -81,8 +82,6 @@ namespace WebSocketExample
                 app.UseSwagger();
                 app.UseSwaggerUI();
             }
-
-
 
             app.UseHttpsRedirection();
             app.UseAuthentication();
@@ -95,28 +94,10 @@ namespace WebSocketExample
                 // CORS 정책에 따라 특정 오리진만 허용할 수 있습니다.
                 AllowedOrigins = { "https://example.com", "https://another.com" } // Cors
             });
-            
-            // WebSocket 엔드포인트 등록
-            app.Map("/ws", async context =>
-            {
-                // JWT 토큰 없으면 401 
-                if (!context.User.Identity?.IsAuthenticated ?? true)
-                {
-                    context.Response.StatusCode = 401;
-                    return;
-                }
 
-                if (context.WebSockets.IsWebSocketRequest)
-                {
-                    var webSocket = await context.WebSockets.AcceptWebSocketAsync();
-                    var handler = app.Services.GetRequiredService<ChatWebSocketHandler>();
-                    await handler.HandleAsync(webSocket, context.User);
-                }
-                else
-                {
-                    context.Response.StatusCode = 400;
-                }
-            });
+            // 커스텀 WebSocket 미들웨어 등록
+            app.UseMiddleware<WebSocketMiddleware>();
+
 
 
 
