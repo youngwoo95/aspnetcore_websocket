@@ -14,7 +14,6 @@ namespace WebSocketExample
     {
         private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ClientConnection>> _groups = new();
 
-
         public async Task HandleAsync(WebSocket webSocket, ClaimsPrincipal user)
         {
             var userId = GetUserId(user);

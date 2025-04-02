@@ -90,7 +90,10 @@ namespace WebSocketExample
             app.UseHttpsRedirection();
             app.UseAuthentication();
             app.UseAuthorization();
+
             // 웹소켓 옵션
+            // WebSocket 기능 활성화 (기본적으로 Upgrade 요청을 처리)
+            // Sec-WebSocket-Key 자동임. - ASP.NET Core
             app.UseWebSockets(new WebSocketOptions
             {
                 // 클라이언트에게 주기적으로 Ping 메시지를 보내 연결이 살아있는지 확인합니다.
