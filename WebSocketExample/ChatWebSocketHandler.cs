@@ -253,8 +253,9 @@ namespace WebSocketExample
                 bodyBuilder.AppendLine(lines[i].Replace("\0", ""));
             }
             var messageBody = bodyBuilder.ToString().TrimEnd();
-            Console.WriteLine(messageBody);
+            //Console.WriteLine(messageBody);
             // 해당 destination(그룹)의 모든 구독자에게 MESSAGE 프레임 전송
+            /*
             if(_groups.TryGetValue(destination, out var group))
             {
                 foreach(var client in group.Values)
@@ -263,7 +264,7 @@ namespace WebSocketExample
                     await SendAsync(client.Socket, messageFrame);
                 }
             }
-
+            */
             Console.WriteLine("STOMP SEND received. Destination: " + destination + ", Message: " + messageBody);
         }
 

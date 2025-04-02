@@ -16,13 +16,13 @@ namespace WebSocketExample
         public string UserId { get; set; }
     }
 
-    // 채팅 메시지 모델
-    public record ChatMessage
-    {
-        public string? command { get; set; }
-        public string? group { get; init; }
-        public string? message { get; set; }
-    }
+    //// 채팅 메시지 모델
+    //public record ChatMessage
+    //{
+    //    public string? command { get; set; }
+    //    public string? group { get; init; }
+    //    public string? message { get; set; }
+    //}
 
     public class Program
     {
@@ -72,8 +72,12 @@ namespace WebSocketExample
             builder.Services.AddSwaggerGen();
 
             // WebSocket 관련 서비스 등록
-            builder.Services.AddSingleton<ChatWebSocketHandler>();
-            builder.Services.AddHostedService<ChatBackgroundService>();
+            //builder.Services.AddSingleton<ChatWebSocketHandler>();
+            builder.Services.AddSingleton<ChatJsonWebSocketHandler>();
+            builder.Services.AddSingleton<ChatStompWebSocketHandler>();
+            //builder.Services.AddHostedService<ChatBackgroundService>();
+            
+
 
             var app = builder.Build();
 

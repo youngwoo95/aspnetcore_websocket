@@ -1,4 +1,6 @@
-﻿namespace WebSocketExample
+﻿using System;
+
+namespace WebSocketExample
 {
     public class WebSocketMiddleware
     {
@@ -9,7 +11,7 @@
             next = _next;
         }
 
-        public async Task InvokeAsync(HttpContext context, ChatWebSocketHandler chatHandler)
+        public async Task InvokeAsync(HttpContext context)
         {
             // "/ws" 경로에 해당하는 요청만 처리
             if (context.Request.Path.Equals("/ws", StringComparison.OrdinalIgnoreCase))
@@ -32,9 +34,21 @@
                         selectedSubProtocol = "stomp";
                     }
                     
+
                     // 핸드셰이크 처리 - 선택한 프로토콜이 있다면 전달
                     var webSocket = await context.WebSockets.AcceptWebSocketAsync(selectedSubProtocol);
-                    await chatHandler.HandleAsync(webSocket, context.User);
+
+                    IChatWebSocketHandler handler;
+                    if(selectedSubProtocol == "stomp")
+                    {
+                        handler = context.RequestServices.GetRequiredService<ChatStompWebSocketHandler>();
+                    }
+                    else
+                    {
+                        handler = context.RequestServices.GetRequiredService<ChatJsonWebSocketHandler>();
+                    }
+
+                    await handler.HandleAsync(webSocket, context.User);
                 }
                 else
                 {
