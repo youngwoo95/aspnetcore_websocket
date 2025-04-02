@@ -90,7 +90,8 @@ namespace WebSocketExample
             app.UseWebSockets(new WebSocketOptions
             {
                 // 클라이언트에게 주기적으로 Ping 메시지를 보내 연결이 살아있는지 확인합니다.
-                KeepAliveInterval = TimeSpan.FromSeconds(120),
+                KeepAliveInterval = TimeSpan.FromSeconds(120), // 자동 PING
+                
                 // CORS 정책에 따라 특정 오리진만 허용할 수 있습니다.
                 AllowedOrigins = { "https://example.com", "https://another.com" } // Cors
             });

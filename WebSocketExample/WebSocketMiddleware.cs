@@ -23,7 +23,17 @@
 
                 if (context.WebSockets.IsWebSocketRequest)
                 {
-                    var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+                    var requestedProtocols = context.Request.Headers["Sec-WebSocket-Protocol"].ToString();
+                    string selectedSubProtocol = null;
+
+                    // 클라이언트가 "stmop" 서브프로토콜을 요청했다면.
+                    if(requestedProtocols.Contains("stomp", StringComparison.OrdinalIgnoreCase))
+                    {
+                        selectedSubProtocol = "stomp";
+                    }
+                    
+                    // 핸드셰이크 처리 - 선택한 프로토콜이 있다면 전달
+                    var webSocket = await context.WebSockets.AcceptWebSocketAsync(selectedSubProtocol);
                     await chatHandler.HandleAsync(webSocket, context.User);
                 }
                 else
